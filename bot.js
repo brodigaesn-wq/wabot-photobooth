@@ -137,10 +137,15 @@ function parseMessage(text) {
 // Sekarang ambil semua subfolder lalu cocokkan manual trim+lowercase,
 // dan log daftar folder yang terlihat kalau gagal ketemu — biar gampang
 // dibedain: ini masalah PENAMAAN atau masalah SHARING/PERMISSION.
-// Abaikan besar/kecil huruf DAN spasi berlebih (spasi ganda, spasi di
-// awal/akhir) — yang penting kata-katanya sama.
+// Abaikan besar/kecil huruf, spasi berlebih, DAN beda separator
+// spasi vs underscore (folder di Drive ternyata pakai underscore,
+// misal "0818_SANDY", sementara bot generate "0818 Sandy" pakai
+// spasi) — yang penting kata-katanya sama.
 function normalize(str) {
-  return str.trim().toLowerCase().replace(/\s+/g, ' ');
+  return str
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, ' '); // spasi & underscore dianggap sama
 }
 
 async function cariFolder(drive, namaFolder, parentId) {
