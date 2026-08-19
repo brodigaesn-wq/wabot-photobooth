@@ -29,6 +29,21 @@
  *    restrict ke Google Drive API saja.
  * 3. Isi GOOGLE_API_KEY dan semua ID folder di THEMA_FOLDER_IDS di bawah.
  * 4. node bot.js -> scan QR
+ *
+ * ----------------------------------------------------------------
+ * CHANGELOG PATCH (fix "folder belum ditemukan" padahal ada di Drive):
+ * - cariFolder() sebelumnya pakai exact match `name = '...'` di query
+ *   Drive API, yang case-sensitive dan gagal kalau nama folder di
+ *   Drive beda dikit (kapitalisasi, spasi ganda, dll) dari yang
+ *   di-generate bot.
+ * - Sekarang cariFolder() ambil SEMUA subfolder di parent, lalu
+ *   dicocokkan manual pakai trim + lowercase -> jauh lebih toleran.
+ * - Ditambah console.log saat folder tidak ketemu, isinya daftar
+ *   nama folder yang benar-benar terlihat oleh bot di parent itu.
+ *   Ini kunci debug: kalau daftarnya KOSONG, berarti masalah
+ *   sharing/permission (folder belum "Anyone with the link"),
+ *   bukan soal penamaan.
+ * ----------------------------------------------------------------
  */
 
 const { Client, LocalAuth } = require('whatsapp-web.js');
@@ -117,13 +132,30 @@ function parseMessage(text) {
 }
 
 // ======== 4. CARI FOLDER CUSTOMER DI DALAM Original/Print (sudah tahu ID-nya) ========
+// VERSI DIPERBAIKI: sebelumnya pakai exact match `name = '...'` di query
+// Drive API (case-sensitive, gagal kalau ada beda spasi/kapitalisasi).
+// Sekarang ambil semua subfolder lalu cocokkan manual trim+lowercase,
+// dan log daftar folder yang terlihat kalau gagal ketemu — biar gampang
+// dibedain: ini masalah PENAMAAN atau masalah SHARING/PERMISSION.
 async function cariFolder(drive, namaFolder, parentId) {
   const res = await drive.files.list({
-    q: `'${parentId}' in parents and name = '${namaFolder}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+    q: `'${parentId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
     fields: 'files(id, name, webViewLink)',
     spaces: 'drive',
+    pageSize: 1000,
   });
-  return res.data.files[0] || null;
+
+  const target = namaFolder.trim().toLowerCase();
+  const found = res.data.files.find((f) => f.name.trim().toLowerCase() === target);
+
+  if (!found) {
+    console.log(
+      `[cariFolder] Tidak ketemu "${namaFolder}" di parent ${parentId}. ` +
+        `Folder yang ada: ${res.data.files.map((f) => `"${f.name}"`).join(', ') || '(kosong / tidak ada akses)'}`
+    );
+  }
+
+  return found || null;
 }
 
 async function cariLinkSatuTema({ tanggal, nama, tema }) {
