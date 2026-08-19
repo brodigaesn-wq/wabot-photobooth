@@ -213,10 +213,15 @@ function tambahLog(entry) {
 }
 
 // ======== 7. SETUP CLIENT WHATSAPP ========
+// Di server (Railway/Nixpacks), pakai Chromium sistem lewat env var
+// PUPPETEER_EXECUTABLE_PATH supaya tidak bentrok versi glibc dengan
+// Chrome hasil download Puppeteer. Kalau env var tidak diset (misal
+// pas jalan di laptop lokal), biarkan Puppeteer pakai Chrome default-nya.
 const client = new Client({
   authStrategy: new LocalAuth(),
   puppeteer: {
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
   },
 });
 
