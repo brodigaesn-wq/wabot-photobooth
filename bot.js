@@ -137,6 +137,12 @@ function parseMessage(text) {
 // Sekarang ambil semua subfolder lalu cocokkan manual trim+lowercase,
 // dan log daftar folder yang terlihat kalau gagal ketemu — biar gampang
 // dibedain: ini masalah PENAMAAN atau masalah SHARING/PERMISSION.
+// Abaikan besar/kecil huruf DAN spasi berlebih (spasi ganda, spasi di
+// awal/akhir) — yang penting kata-katanya sama.
+function normalize(str) {
+  return str.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
 async function cariFolder(drive, namaFolder, parentId) {
   const res = await drive.files.list({
     q: `'${parentId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
@@ -145,8 +151,8 @@ async function cariFolder(drive, namaFolder, parentId) {
     pageSize: 1000,
   });
 
-  const target = namaFolder.trim().toLowerCase();
-  const found = res.data.files.find((f) => f.name.trim().toLowerCase() === target);
+  const target = normalize(namaFolder);
+  const found = res.data.files.find((f) => normalize(f.name) === target);
 
   if (!found) {
     console.log(
