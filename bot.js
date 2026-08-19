@@ -222,7 +222,10 @@ const client = new Client({
 
 client.on('qr', (qr) => {
   qrcode.generate(qr, { small: true });
-  console.log('Scan QR di atas dengan WhatsApp kamu.');
+  const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qr)}`;
+  console.log('QR ASCII di atas mungkin tidak terbaca di log Railway.');
+  console.log('Buka link berikut di browser buat scan QR-nya:');
+  console.log(qrImageUrl);
 });
 
 client.on('ready', () => console.log('Bot WA siap digunakan!'));
