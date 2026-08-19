@@ -51,6 +51,8 @@ const qrcode = require('qrcode-terminal');
 const { google } = require('googleapis');
 const fs = require('fs');
 const path = require('path');
+const express = require('express');
+const cors = require('cors');
 
 // ======== 1. API KEY GOOGLE ========
 const GOOGLE_API_KEY = 'AIzaSyB91Lorrzgo4HZDJLDYv11xCWz8RkngCUk';
@@ -271,6 +273,30 @@ function tambahLog(entry) {
   fs.writeFileSync(LOG_PATH, JSON.stringify(logs, null, 2));
 }
 
+// ======== 6b. SERVER HTTP UNTUK DASHBOARD ========
+// Dashboard di-deploy TERPISAH (Vercel/Netlify) dan panggil endpoint ini
+// dari browser -> wajib pakai CORS supaya browser tidak block requestnya.
+//
+// GANTI '*' di bawah dengan domain dashboard kamu setelah deploy
+// (misal 'https://dashboard-photobooth.vercel.app') biar lebih aman,
+// jangan biarkan '*' selamanya di production.
+const app = express();
+app.use(cors({ origin: '*' }));
+
+app.get('/logs', (req, res) => {
+  let logs = [];
+  if (fs.existsSync(LOG_PATH)) {
+    logs = JSON.parse(fs.readFileSync(LOG_PATH, 'utf-8'));
+  }
+  res.json(logs);
+});
+
+// endpoint sederhana buat cek server hidup (dipanggil browser/monitoring)
+app.get('/', (req, res) => res.send('Bot photobooth aktif ✅'));
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server dashboard jalan di port ${PORT}`));
+
 // ======== 7. SETUP CLIENT WHATSAPP ========
 // webVersionCache: { type: 'none' } -> fix umum untuk error
 // "Execution context was destroyed" / "Protocol error (Runtime.callFunctionOn)"
@@ -292,11 +318,34 @@ client.on('qr', (qr) => {
   console.log(qrImageUrl);
 });
 
+// Listener tambahan ini penting: whatsapp-web.js bisa kehilangan koneksi
+// (misal HP di-logout dari WhatsApp Web, kena rate limit, atau sesi
+// kadaluarsa) TANPA bikin proses crash — jadi Railway kelihatan
+// "normal jalan" padahal bot sudah nggak nerima pesan sama sekali.
+// Sebelumnya tidak ada log buat kejadian ini, makanya nggak ketahuan.
+client.on('disconnected', (reason) => {
+  console.error('❌ Bot WA TERPUTUS dari WhatsApp:', reason);
+  console.error('Perlu scan ulang QR atau restart service di Railway.');
+});
+
+client.on('auth_failure', (msg) => {
+  console.error('❌ Autentikasi WhatsApp GAGAL:', msg);
+});
+
+client.on('change_state', (state) => {
+  console.log('ℹ️ Status koneksi WA berubah:', state);
+});
+
 client.on('ready', () => console.log('Bot WA siap digunakan!'));
 
 client.on('message', async (msg) => {
+  console.log(`📩 Pesan masuk dari ${msg.from}: "${msg.body}"`);
+
   const parsed = parseMessage(msg.body);
-  if (!parsed) return;
+  if (!parsed) {
+    console.log('   ↳ Tidak diproses: format pesan tidak cocok pola "tanggal nama tema".');
+    return;
+  }
 
   const { tanggal, nama, temaList } = parsed;
   const nomorCustomer = msg.from;
