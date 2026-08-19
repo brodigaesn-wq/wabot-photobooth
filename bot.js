@@ -179,13 +179,14 @@ async function cariLinkSatuTema({ tanggal, nama, tema }) {
 
   if (originalOnly) {
     const folderOriginal = await cariFolder(drive, 'Original', folderTemaId);
-    if (!folderOriginal) return { tema, linkOriginal: null, linkPrint: null, originalOnly: true };
+    if (!folderOriginal) return { tema, linkOriginal: null, linkPrint: null, originalOnly: true, namaAsli: null };
     const folderCustomer = await cariFolder(drive, namaFolderCustomer, folderOriginal.id);
     return {
       tema,
       linkOriginal: folderCustomer ? folderCustomer.webViewLink : null,
       linkPrint: null,
       originalOnly: true,
+      namaAsli: folderCustomer ? folderCustomer.name : null,
     };
   }
 
@@ -206,12 +207,27 @@ async function cariLinkSatuTema({ tanggal, nama, tema }) {
     linkOriginal: customerOriginal ? customerOriginal.webViewLink : null,
     linkPrint: customerPrint ? customerPrint.webViewLink : null,
     originalOnly: false,
+    // nama folder ASLI di Drive (misal "0818_SANDY"), dipakai buat
+    // ambil nama customer yang sebenarnya di template pesan
+    namaAsli: customerOriginal ? customerOriginal.name : customerPrint ? customerPrint.name : null,
   };
 }
 
 // cari semua tema sekaligus, paralel biar cepat
 async function cariLinkSemuaTema({ tanggal, nama, temaList }) {
   return Promise.all(temaList.map((tema) => cariLinkSatuTema({ tanggal, nama, tema })));
+}
+
+// Dari nama folder asli (misal "0818_SANDY" atau "0725 Caca Cantik"),
+// buang bagian tanggal di depan dan rapikan jadi "Sandy" / "Caca Cantik".
+// Kalau gagal (folder tidak ketemu di tema manapun), fallback ke nama
+// hasil parsing chat customer.
+function ambilNamaUntukGreeting(hasilSemuaTema, namaFallback) {
+  const namaAsli = hasilSemuaTema.map((h) => h && h.namaAsli).find(Boolean);
+  if (!namaAsli) return capitalize(namaFallback);
+
+  const bagianNama = namaAsli.replace(/^\S+[\s_]+/, ''); // buang token tanggal di depan
+  return capitalize(bagianNama.replace(/_/g, ' ').toLowerCase());
 }
 
 function capitalize(str) {
@@ -222,7 +238,7 @@ function capitalize(str) {
 const LINK_GOOGLE_MAPS = 'https://maps.app.goo.gl/N25ZMuMFbf8LaggL6';
 const INSTAGRAM_HANDLE = '@jjikgostudio.id';
 
-function buatTemplatePesan(hasilSemuaTema) {
+function buatTemplatePesan(hasilSemuaTema, namaGreeting) {
   const bagianTema = hasilSemuaTema
     .map((h) => {
       const barisPrint = h.originalOnly ? '' : `🖨️ File Print: \n${h.linkPrint || '(belum tersedia)'}\n`;
@@ -231,7 +247,7 @@ function buatTemplatePesan(hasilSemuaTema) {
     })
     .join('\n');
 
-  return `Halo ! 👋
+  return `Halo ${namaGreeting}! 👋
 Terima kasih sudah berfoto di JJIKGO STUDIO ✨
 Berikut link soft file kamu:
 ${bagianTema}
@@ -301,7 +317,8 @@ client.on('message', async (msg) => {
       return;
     }
 
-    const pesan = buatTemplatePesan(hasilSemuaTema);
+    const namaGreeting = ambilNamaUntukGreeting(hasilSemuaTema, nama);
+    const pesan = buatTemplatePesan(hasilSemuaTema, namaGreeting);
     await msg.reply(pesan);
     tambahLog({ nomorCustomer, tanggal, nama, tema: temaList.join(', '), status: 'TERKIRIM' });
   } catch (err) {
