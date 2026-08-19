@@ -253,7 +253,7 @@ function buatTemplatePesan(hasilSemuaTema, namaGreeting) {
 Terima kasih sudah berfoto di JJIKGO STUDIO ✨
 Berikut link soft file kamu:
 ${bagianTema}
-Berikan juga riview google mapsnya
+Berikan juga review google mapsnya
 📍 ${LINK_GOOGLE_MAPS}
 
 Jangan lupa follow dan tag kami di Instagram ya!
