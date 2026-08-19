@@ -213,8 +213,13 @@ function tambahLog(entry) {
 }
 
 // ======== 7. SETUP CLIENT WHATSAPP ========
+// webVersionCache: { type: 'none' } -> fix umum untuk error
+// "Execution context was destroyed" / "Protocol error (Runtime.callFunctionOn)"
+// yang muncul tepat setelah scan QR, karena whatsapp-web.js sebelumnya
+// pakai cache versi WhatsApp Web yang sudah tidak cocok.
 const client = new Client({
   authStrategy: new LocalAuth(),
+  webVersionCache: { type: 'none' },
   puppeteer: {
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
   },
