@@ -46,6 +46,7 @@
  * ----------------------------------------------------------------
  */
 
+require('dotenv').config();
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const { google } = require('googleapis');
@@ -55,7 +56,14 @@ const express = require('express');
 const cors = require('cors');
 
 // ======== 1. API KEY GOOGLE ========
-const GOOGLE_API_KEY = 'AIzaSyB91Lorrzgo4HZDJLDYv11xCWz8RkngCUk';
+// Diambil dari file .env (JANGAN hardcode key di sini / jangan commit .env ke Git).
+// Buat file .env di folder yang sama isinya: GOOGLE_API_KEY=xxxxx
+const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
+
+if (!GOOGLE_API_KEY) {
+  console.error('❌ GOOGLE_API_KEY tidak ditemukan. Pastikan file .env berisi GOOGLE_API_KEY=xxxxx');
+  process.exit(1);
+}
 
 function getDriveClient() {
   return google.drive({ version: 'v3', auth: GOOGLE_API_KEY });
@@ -220,16 +228,32 @@ async function cariLinkSemuaTema({ tanggal, nama, temaList }) {
   return Promise.all(temaList.map((tema) => cariLinkSatuTema({ tanggal, nama, tema })));
 }
 
+// Beberapa customer adalah KOL/endorser, dan nama folder/chat-nya suka
+// diakhiri kata "kol" sebagai penanda saja (misal "Gesti Kol"), BUKAN
+// bagian dari nama asli. Waktu bikin greeting, kata "kol" di akhir ini
+// harus dibuang supaya bot sapa "Halo Gesti!", bukan "Halo Kol!".
+function stripKolSuffix(nama) {
+  return nama.replace(/\s+kol\s*$/i, '').trim();
+}
+
 // Dari nama folder asli (misal "0818_SANDY" atau "0725 Caca Cantik"),
 // buang bagian tanggal di depan dan rapikan jadi "Sandy" / "Caca Cantik".
 // Kalau gagal (folder tidak ketemu di tema manapun), fallback ke nama
-// hasil parsing chat customer.
+// hasil parsing chat customer. Kata "kol" di akhir nama selalu dibuang
+// dulu sebelum dipakai sebagai sapaan (lihat stripKolSuffix di atas).
 function ambilNamaUntukGreeting(hasilSemuaTema, namaFallback) {
   const namaAsli = hasilSemuaTema.map((h) => h && h.namaAsli).find(Boolean);
-  if (!namaAsli) return capitalize(namaFallback);
+  if (!namaAsli) return capitalize(stripKolSuffix(namaFallback));
 
-  const bagianNama = namaAsli.replace(/^\S+[\s_]+/, ''); // buang token tanggal di depan
-  return capitalize(bagianNama.replace(/_/g, ' ').toLowerCase());
+  // pecah per kata (spasi & underscore dianggap sama), lalu buang token
+  // PERTAMA saja (tanggal) — sebelumnya pakai regex greedy yang salah
+  // potong kalau nama customernya 2 kata (misal "0722_GESTI KOL" jadi
+  // kepotong sisa "KOL" doang, bukan "GESTI KOL").
+  const tokens = namaAsli.trim().split(/[\s_]+/);
+  tokens.shift(); // buang token tanggal di depan
+  const bagianNama = tokens.join(' ').toLowerCase();
+  const namaBersih = stripKolSuffix(bagianNama);
+  return capitalize(namaBersih);
 }
 
 function capitalize(str) {
