@@ -93,9 +93,14 @@ const THEMA_FOLDER_IDS = {
 const DAFTAR_TEMA = Object.keys(THEMA_FOLDER_IDS).sort((a, b) => b.split(' ').length - a.split(' ').length);
 const TEMA_ORIGINAL_ONLY = ['family room'];
 
-// ======== 3. PARSER PESAN (support multi tema) ========
-// "0819 agus vinyl" -> { tanggal, nama: 'agus', temaList: ['vinyl'] }
-// "0819 agus vinyl dan album" -> { tanggal, nama: 'agus', temaList: ['vinyl','album'] }
+// ======== 3. PARSER PESAN (support multi tema, TANPA tanggal) ========
+// "agus vinyl" -> { nama: 'agus', temaList: ['vinyl'] }
+// "agus vinyl dan album" -> { nama: 'agus', temaList: ['vinyl','album'] }
+// Tanggal TIDAK lagi wajib diketik customer. Kalau ternyata ada 2
+// folder berbeda dengan nama yang sama persis, disambiguasinya
+// ditangani otomatis di cariFolderCustomerByNama() lewat tanggal
+// folder tersebut DIBUAT di Google Drive (bukan tanggal yang diketik
+// customer) — lihat komentar di fungsi itu.
 function cariTemaDiAkhir(text) {
   for (const tema of DAFTAR_TEMA) {
     if (text.endsWith(tema)) {
@@ -109,10 +114,9 @@ function cariTemaDiAkhir(text) {
 function parseMessage(text) {
   const trimmed = text.trim().toLowerCase();
   const tokens = trimmed.split(/\s+/);
-  if (tokens.length < 3) return null;
+  if (tokens.length < 2) return null;
 
-  const tanggal = tokens[0];
-  const sisaText = tokens.slice(1).join(' ');
+  const sisaText = trimmed;
 
   // pisah berdasarkan kata "dan" (utuh) atau koma
   const chunks = sisaText
@@ -123,7 +127,7 @@ function parseMessage(text) {
   if (chunks.length === 1) {
     const hasil = cariTemaDiAkhir(chunks[0]);
     if (!hasil) return null;
-    return { tanggal, nama: hasil.nama, temaList: [hasil.tema] };
+    return { nama: hasil.nama, temaList: [hasil.tema] };
   }
 
   // chunk ke-2 dst harus persis nama tema (murni tema, tanpa nama lagi)
@@ -138,7 +142,7 @@ function parseMessage(text) {
   if (!hasilPertama) return null;
   temaList.unshift(hasilPertama.tema);
 
-  return { tanggal, nama: hasilPertama.nama, temaList };
+  return { nama: hasilPertama.nama, temaList };
 }
 
 // ======== 4. CARI FOLDER CUSTOMER DI DALAM Original/Print (sudah tahu ID-nya) ========
@@ -179,24 +183,114 @@ async function cariFolder(drive, namaFolder, parentId) {
   return found || null;
 }
 
-async function cariLinkSatuTema({ tanggal, nama, tema }) {
+// tanggal (YYYY-MM-DD) di timezone Asia/Jakarta, dipakai buat
+// membandingkan "folder ini dibuat hari ini atau bukan" — BUKAN
+// tanggal yang diketik customer (customer sekarang tidak perlu
+// ketik tanggal sama sekali).
+function tanggalJakarta(isoString) {
+  return new Date(isoString).toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' });
+}
+function tanggalHariIniJakarta() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' });
+}
+
+// Cari folder customer HANYA berdasarkan NAMA (tanpa tanggal dari
+// customer). Folder asli di Drive tetap dinamai "TANGGAL_NAMA" oleh
+// admin (misal "0722_GESTI KOL") — token tanggal di depan itu dibuang
+// dulu sebelum dibandingkan dengan nama yang disebut customer.
+//
+// Kalau ternyata ada LEBIH DARI SATU folder dengan nama yang sama
+// persis (misal ada 2 customer "Gesti" beda hari), otomatis
+// dipersempit ke folder yang DIBUAT HARI INI di Drive (bukan tanggal
+// yang diketik customer, karena customer tidak lagi kirim tanggal).
+// Ini bekerja untuk kasus paling umum: customer chat bot di hari yang
+// sama dia difoto. Kalau masih tetap tabrakan (dua folder sama-sama
+// dibuat hari ini, atau customer chat beberapa hari kemudian saat
+// ada folder nama sama dari hari lain), bot akan minta customer
+// hubungi admin manual — supaya tidak salah kirim file ke orang lain.
+// Kalau customer masih kebiasaan lama ketik tanggal di depan (misal
+// "0722 gesti magazine box"), buang token angka itu supaya tetap
+// bisa cocok — format baru tidak mewajibkan tanggal, tapi tetap
+// menerima kalau ada yang masih terbawa kebiasaan lama.
+function buangTanggalKebiasaanLama(nama) {
+  const tokens = nama.trim().split(/\s+/);
+  if (tokens.length > 1 && /^\d{3,4}$/.test(tokens[0])) {
+    return tokens.slice(1).join(' ');
+  }
+  return nama;
+}
+
+async function cariFolderCustomerByNama(drive, namaTarget, parentId) {
+  const res = await drive.files.list({
+    q: `'${parentId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+    fields: 'files(id, name, webViewLink, createdTime)',
+    spaces: 'drive',
+    pageSize: 1000,
+  });
+
+  const cariCocok = (targetMentah) => {
+    const target = normalize(targetMentah);
+    return res.data.files.filter((f) => {
+      const tokens = f.name.trim().split(/[\s_]+/);
+      tokens.shift(); // buang token tanggal di depan nama folder asli
+      return normalize(tokens.join(' ')) === target;
+    });
+  };
+
+  let matches = cariCocok(namaTarget);
+
+  // kalau tidak ketemu & nama diawali angka mirip tanggal, coba lagi tanpa itu
+  if (matches.length === 0) {
+    const namaTanpaTanggal = buangTanggalKebiasaanLama(namaTarget);
+    if (namaTanpaTanggal !== namaTarget) {
+      matches = cariCocok(namaTanpaTanggal);
+    }
+  }
+
+  if (matches.length === 0) {
+    console.log(`[cariFolderCustomerByNama] Tidak ketemu folder nama "${namaTarget}" di parent ${parentId}.`);
+    return { status: 'not_found', folder: null };
+  }
+
+  if (matches.length === 1) {
+    return { status: 'found', folder: matches[0] };
+  }
+
+  // TABRAKAN NAMA — persempit ke folder yang dibuat hari ini
+  const hariIni = tanggalHariIniJakarta();
+  const dibuatHariIni = matches.filter((f) => tanggalJakarta(f.createdTime) === hariIni);
+
+  if (dibuatHariIni.length === 1) {
+    return { status: 'found', folder: dibuatHariIni[0] };
+  }
+
+  console.log(
+    `[cariFolderCustomerByNama] Nama "${namaTarget}" tabrakan (${matches.length} folder), ` +
+      `dan tidak bisa dipersempit lewat "dibuat hari ini" (cocok: ${dibuatHariIni.length}).`
+  );
+  return { status: 'ambiguous', folder: null };
+}
+
+async function cariLinkSatuTema({ nama, tema }) {
   const folderTemaId = THEMA_FOLDER_IDS[tema];
   if (!folderTemaId) return null;
 
   const drive = getDriveClient();
-  const namaFolderCustomer = `${tanggal} ${capitalize(nama)}`;
   const originalOnly = TEMA_ORIGINAL_ONLY.includes(tema);
 
   if (originalOnly) {
     const folderOriginal = await cariFolder(drive, 'Original', folderTemaId);
-    if (!folderOriginal) return { tema, linkOriginal: null, linkPrint: null, originalOnly: true, namaAsli: null };
-    const folderCustomer = await cariFolder(drive, namaFolderCustomer, folderOriginal.id);
+    if (!folderOriginal) {
+      return { tema, linkOriginal: null, linkPrint: null, originalOnly: true, namaAsli: null, status: 'not_found' };
+    }
+    const hasil = await cariFolderCustomerByNama(drive, nama, folderOriginal.id);
     return {
       tema,
-      linkOriginal: folderCustomer ? folderCustomer.webViewLink : null,
+      linkOriginal: hasil.folder ? hasil.folder.webViewLink : null,
       linkPrint: null,
       originalOnly: true,
-      namaAsli: folderCustomer ? folderCustomer.name : null,
+      namaAsli: hasil.folder ? hasil.folder.name : null,
+      status: hasil.status,
     };
   }
 
@@ -206,26 +300,35 @@ async function cariLinkSatuTema({ tanggal, nama, tema }) {
     cariFolder(drive, 'Print', folderTemaId),
   ]);
 
-  // lalu cari folder customer di masing-masing
-  const [customerOriginal, customerPrint] = await Promise.all([
-    folderOriginal ? cariFolder(drive, namaFolderCustomer, folderOriginal.id) : null,
-    folderPrint ? cariFolder(drive, namaFolderCustomer, folderPrint.id) : null,
+  // lalu cari folder customer (berdasarkan nama saja) di masing-masing
+  const [hasilOriginal, hasilPrint] = await Promise.all([
+    folderOriginal ? cariFolderCustomerByNama(drive, nama, folderOriginal.id) : { status: 'not_found', folder: null },
+    folderPrint ? cariFolderCustomerByNama(drive, nama, folderPrint.id) : { status: 'not_found', folder: null },
   ]);
+
+  // kalau salah satu sisi (Original/Print) tabrakan nama, anggap seluruh tema ini ambiguous
+  const status =
+    hasilOriginal.status === 'ambiguous' || hasilPrint.status === 'ambiguous'
+      ? 'ambiguous'
+      : hasilOriginal.folder || hasilPrint.folder
+        ? 'found'
+        : 'not_found';
 
   return {
     tema,
-    linkOriginal: customerOriginal ? customerOriginal.webViewLink : null,
-    linkPrint: customerPrint ? customerPrint.webViewLink : null,
+    linkOriginal: hasilOriginal.folder ? hasilOriginal.folder.webViewLink : null,
+    linkPrint: hasilPrint.folder ? hasilPrint.folder.webViewLink : null,
     originalOnly: false,
     // nama folder ASLI di Drive (misal "0818_SANDY"), dipakai buat
     // ambil nama customer yang sebenarnya di template pesan
-    namaAsli: customerOriginal ? customerOriginal.name : customerPrint ? customerPrint.name : null,
+    namaAsli: hasilOriginal.folder ? hasilOriginal.folder.name : hasilPrint.folder ? hasilPrint.folder.name : null,
+    status,
   };
 }
 
 // cari semua tema sekaligus, paralel biar cepat
-async function cariLinkSemuaTema({ tanggal, nama, temaList }) {
-  return Promise.all(temaList.map((tema) => cariLinkSatuTema({ tanggal, nama, tema })));
+async function cariLinkSemuaTema({ nama, temaList }) {
+  return Promise.all(temaList.map((tema) => cariLinkSatuTema({ nama, tema })));
 }
 
 // Beberapa customer adalah KOL/endorser, dan nama folder/chat-nya suka
@@ -367,15 +470,25 @@ client.on('message', async (msg) => {
 
   const parsed = parseMessage(msg.body);
   if (!parsed) {
-    console.log('   ↳ Tidak diproses: format pesan tidak cocok pola "tanggal nama tema".');
+    console.log('   ↳ Tidak diproses: format pesan tidak cocok pola "nama tema".');
     return;
   }
 
-  const { tanggal, nama, temaList } = parsed;
+  const { nama, temaList } = parsed;
   const nomorCustomer = msg.from;
 
   try {
-    const hasilSemuaTema = await cariLinkSemuaTema({ tanggal, nama, temaList });
+    const hasilSemuaTema = await cariLinkSemuaTema({ nama, temaList });
+
+    const adaAmbiguous = hasilSemuaTema.some((h) => h && h.status === 'ambiguous');
+    if (adaAmbiguous) {
+      await msg.reply(
+        `Maaf kak, ada lebih dari satu hasil foto dengan nama "${nama}" dan bot belum bisa membedakan otomatis mana punya kakak. Mohon hubungi admin langsung ya biar dibantu carikan manual 🙏`
+      );
+      tambahLog({ nomorCustomer, tanggal: '-', nama, tema: temaList.join(', '), status: 'GAGAL - nama tabrakan' });
+      return;
+    }
+
     const adaYangKosong = hasilSemuaTema.some((h) => !h || !h.linkOriginal);
 
     if (adaYangKosong) {
@@ -386,18 +499,18 @@ client.on('message', async (msg) => {
       await msg.reply(
         `Maaf kak, folder untuk tema "${temaBermasalah}" belum ditemukan di Drive. Mohon tunggu admin upload dulu ya, atau cek kembali penulisannya.`
       );
-      tambahLog({ nomorCustomer, tanggal, nama, tema: temaList.join(', '), status: 'GAGAL - folder tidak ditemukan' });
+      tambahLog({ nomorCustomer, tanggal: '-', nama, tema: temaList.join(', '), status: 'GAGAL - folder tidak ditemukan' });
       return;
     }
 
     const namaGreeting = ambilNamaUntukGreeting(hasilSemuaTema, nama);
     const pesan = buatTemplatePesan(hasilSemuaTema, namaGreeting);
     await msg.reply(pesan);
-    tambahLog({ nomorCustomer, tanggal, nama, tema: temaList.join(', '), status: 'TERKIRIM' });
+    tambahLog({ nomorCustomer, tanggal: '-', nama, tema: temaList.join(', '), status: 'TERKIRIM' });
   } catch (err) {
     console.error('Error handling message:', err);
     await msg.reply('Maaf kak, terjadi kendala teknis. Admin akan segera membantu.');
-    tambahLog({ nomorCustomer, tanggal, nama, tema: temaList.join(', '), status: 'ERROR' });
+    tambahLog({ nomorCustomer, tanggal: '-', nama, tema: temaList.join(', '), status: 'ERROR' });
   }
 });
 
