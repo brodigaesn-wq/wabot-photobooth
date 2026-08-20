@@ -1,0 +1,15 @@
+# Rahasia — JANGAN pernah di-commit
+.env
+
+# Dependency
+node_modules/
+
+# Sesi WhatsApp Web (kalau ini ke-commit, orang lain bisa "menyamar" jadi bot kamu tanpa scan QR)
+.wwebjs_auth/
+.wwebjs_cache/
+
+# Data transaksi/log (bisa berisi nomor HP customer — data pribadi)
+logs.json
+
+# Log pm2 lokal (kalau ada disimpan di folder project)
+*.log
